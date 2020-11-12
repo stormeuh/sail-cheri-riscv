@@ -68,6 +68,8 @@ bitfield ccsr : xlenbits = {
   /* Bits allocated from 31 downwards are used for feature flags. */
   tc      :  31,     /* tag-clearing error semantics */
   nr      :  30,     /* no DDC/PCC relocation */
+  ugclg   :  3,      /* Global Cap Load Gen bit for User pages */
+  sgclg   :  2,      /* Global Cap Load Gen bit for System (not User) pages */
   e       :  0       /* enable */
 }
 
@@ -80,6 +82,20 @@ register uccsr : ccsr
 function legalize_ccsr(csrp : Privilege, c : ccsr, v : xlenbits) -> ccsr = {
   // write only the defined bits, leaving the other bits untouched
   let v = Mk_ccsr(v);
+
+  let c : ccsr = match csrp {
+    User => {
+      // No bits defined for uccsr
+      c
+    },
+    _ => {
+      // GCLG bits defined for both m- and s-ccsr
+      let c = update_ugclg(c, v.ugclg());
+      let c = update_sgclg(c, v.sgclg());
+      c
+    }
+  };
+
   /* For now the e bit is not really supported so hardwired to true */
   let c = update_e(c, 0b1);
   /* Read-only feature bits to allow for software to detect CHERI semantics. */
