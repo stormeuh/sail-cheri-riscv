@@ -100,6 +100,7 @@ struct Capability = {
   permit_execute         : bool,
   global                 : bool,
   reserved               : bits(cap_reserved_width),
+  uninit                 : bool,
   flag_cap_mode          : bool,
   internal_E             : bool,
   E                      : bits(cap_E_width),
@@ -125,6 +126,7 @@ let null_cap : Capability = struct {
   permit_execute         = false,
   global                 = false,
   reserved               = zeros(),
+  uninit                 = false,
   flag_cap_mode          = false,
   internal_E             = true,
   E                      = cap_reset_E,
@@ -150,6 +152,7 @@ let default_cap : Capability = struct {
   permit_execute         = true,
   global                 = true,
   reserved               = zeros(),
+  uninit                 = false,
   flag_cap_mode          = false,
   internal_E             = true,
   E                      = cap_reset_E,
@@ -215,6 +218,7 @@ function encCapabilityToCapability(t,c) : (bool, EncCapability) -> Capability = 
     permit_execute         = bit_to_bool(c.perms[1]),
     global                 = bit_to_bool(c.perms[0]),
     reserved               = c.reserved,
+    uninit                 = bit_to_bool(c.uninit),
     flag_cap_mode          = bit_to_bool(c.flags[0]),
     internal_E             = internal_E,
     E                      = E,
@@ -239,6 +243,7 @@ function capToEncCap(cap) : Capability -> EncCapability = {
   return struct {
     perms = cap.uperms @ getCapHardPerms(cap),
     reserved = cap.reserved,
+    uninit = bool_to_bit(cap.uninit),
     flags = bool_to_bits(cap.flag_cap_mode),
     otype = cap.otype,
     internal_E = bool_to_bits(cap.internal_E)[0],
@@ -461,6 +466,15 @@ function inCapBounds (cap, addr, size) = {
   (a >= base) & ((a + size) <= top)
 }
 
+/*!
+ * Load from given address using given authorizing capability is checked for
+ * violation of uninitialised capability.
+ */
+val check_uninit : (Capability, CapAddrBits) -> bool
+function check_uninit (auth_val, addr) = {
+  auth_val.uninit & (addr <_u auth_val.address) 
+}
+
 function getCapCursor(cap) : Capability -> CapAddrInt = unsigned(cap.address)
 
 function int_to_cap (offset) : CapAddrBits -> Capability =
@@ -550,6 +564,8 @@ function capToString (cap) = {
   concat_str(if cap.tag then "1" else "0",
   concat_str(" s:",
   concat_str(if isCapSealed(cap) then "1" else "0",
+  concat_str(" uninit:",
+  concat_str(if cap.uninit then "1" else "0",
   concat_str(" perms:",
   concat_str(BitStr(0b0 @ getCapPerms(cap)),
   concat_str(" type:",
@@ -558,7 +574,7 @@ function capToString (cap) = {
   concat_str(BitStr(cap.address),
   concat_str(" base:",
   concat_str(BitStr(getCapBaseBits(cap)),
-  concat_str(" length:", len_str)))))))))))))
+  concat_str(" length:", len_str)))))))))))))))
 }
 function getRepresentableAlignmentMask(len) : xlenbits -> xlenbits = {
   let (exact, c) = setCapBounds(default_cap, to_bits(sizeof(xlen), 0), 0b0 @ len);

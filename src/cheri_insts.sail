@@ -516,16 +516,25 @@ union clause ast = CIncOffset : (regidx, regidx, regidx)
  * sealed, then *cd*.**tag** is cleared. The remaining capability fields are
  * set to what the in-memory representation of *cs1* with the address set to
  * *cs1*.**address** $+$ *rs2* decodes to.
+ *
+ * ## Exceptions
+ *
+ * An exception is raised if:
+ *   - *cs1*.**tag** is set, *cs1* is uninitialised and *rs2* is negative.
  */
 function clause execute (CIncOffset(cd, cs1, rs2)) = {
   let cs1_val = C(cs1);
   let rs2_val = X(rs2);
 
   let inCap = clearTagIfSealed(cs1_val);
-  let (success, newCap) = incCapOffset(inCap, rs2_val);
-
-  C(cd) = clearTagIf(newCap, not(success));
-  RETIRE_SUCCESS
+  if inCap.tag & inCap.uninit & bit_to_bool(rs2_val[63]) then {
+    handle_cheri_reg_exception(CapEx_UninitViolation, cs1);
+    RETIRE_FAIL
+  } else {
+    let (success, newCap) = incCapOffset(inCap, rs2_val);
+    C(cd) = clearTagIf(newCap, not(success));
+    RETIRE_SUCCESS
+  }
 }
 
 union clause ast = CIncOffsetImmediate : (regidx, regidx, bits(12))
@@ -536,16 +545,25 @@ union clause ast = CIncOffsetImmediate : (regidx, regidx, bits(12))
  * sealed, then *cd*.**tag** is cleared. The remaining capability fields are
  * set to what the in-memory representation of *cs1* with the address set to
  * *cs1*.**address** $+$ *imm* decodes to.
+ *
+ * ## Exceptions
+ *
+ * An exception is raised if:
+ *   - *cs1*.**tag** is set, *cs1* is uninitialised and *imm* is negative.
  */
 function clause execute (CIncOffsetImmediate(cd, cs1, imm)) = {
   let cs1_val = C(cs1);
   let immBits : xlenbits = sign_extend(imm);
 
   let inCap = clearTagIfSealed(cs1_val);
-  let (success, newCap) = incCapOffset(inCap, immBits);
-
-  C(cd) = clearTagIf(newCap, not(success));
-  RETIRE_SUCCESS
+  if inCap.tag & inCap.uninit & bit_to_bool(immBits[63]) then {
+    handle_cheri_reg_exception(CapEx_UninitViolation, cs1);
+    RETIRE_FAIL
+  } else {
+    let (success, newCap) = incCapOffset(inCap, immBits);
+    C(cd) = clearTagIf(newCap, not(success));
+    RETIRE_SUCCESS
+  }
 }
 
 union clause ast = CSetOffset : (regidx, regidx, regidx)
@@ -556,16 +574,26 @@ union clause ast = CSetOffset : (regidx, regidx, regidx)
  * sealed, then *cd*.**tag** is cleared. The remaining capability fields are
  * set to what the in-memory representation of *cs1* with the address set to
  * *cs1*.**base** $+$ *rs2* decodes to.
+ *
+ * ## Exceptions
+ *
+ * An exception is raised if:
+ *   - *cs1*.**tag** is set, *cs1* is uninitialised and *cs1*.**offset** < *rs2*.
  */
 function clause execute (CSetOffset(cd, cs1, rs2)) = {
   let cs1_val = C(cs1);
   let rs2_val = X(rs2);
 
   let inCap = clearTagIfSealed(cs1_val);
-  let (success, newCap) = setCapOffset(inCap, rs2_val);
-
-  C(cd) = clearTagIf(newCap, not(success));
-  RETIRE_SUCCESS
+  let offset = getCapOffset(inCap);
+  if inCap.tag & inCap.uninit & (unsigned(rs2_val) < offset) then {
+    handle_cheri_reg_exception(CapEx_UninitViolation, cs1);
+    RETIRE_FAIL
+  } else {
+    let (success, newCap) = setCapOffset(cs1_val, rs2_val);
+    C(cd) = clearTagIf(newCap, not(success));
+    RETIRE_SUCCESS
+  }
 }
 
 union clause ast = CSetAddr : (regidx, regidx, regidx)
@@ -576,16 +604,25 @@ union clause ast = CSetAddr : (regidx, regidx, regidx)
  * sealed, then *cd*.**tag** is cleared. The remaining capability fields are
  * set to what the in-memory representation of *cs1* with the address set to
  * *rs2* decodes to.
+ *
+ * ## Exceptions
+ *
+ * An exception is raised if:
+ *   - *cs1*.**tag** is set, *cs1* is uninitialised and *cs1*.**offset** < *rs2*.
  */
 function clause execute (CSetAddr(cd, cs1, rs2)) = {
   let cs1_val = C(cs1);
   let rs2_val = X(rs2);
 
   let inCap = clearTagIfSealed(cs1_val);
-  let (representable, newCap) = setCapAddr(inCap, rs2_val);
-
-  C(cd) = clearTagIf(newCap, not(representable));
-  RETIRE_SUCCESS
+  if inCap.tag & inCap.uninit & (rs2_val <_u cs1_val.address) then {
+    handle_cheri_reg_exception(CapEx_UninitViolation, cs1);
+    RETIRE_FAIL
+  } else {
+    let (representable, newCap) = setCapAddr(cs1_val, rs2_val);
+    C(cd) = clearTagIf(newCap, not(representable));
+    RETIRE_SUCCESS
+  }
 }
 
 
@@ -1192,6 +1229,9 @@ function handle_load_data_via_cap(rd, auth_idx, auth_val, vaddrBits, is_unsigned
   } else if check_misaligned(vaddrBits, width) then {
     handle_mem_exception(vaddrBits, E_Load_Addr_Align());
     RETIRE_FAIL
+  } else if check_uninit(auth_val, vaddrBits) then {
+    handle_cheri_cap_exception(CapEx_UninitLoadViolation, auth_idx);
+    RETIRE_FAIL
   } else match translateAddr(vaddrBits, Read(Data)) {
     TR_Failure(E_Extension(_), _) => { internal_error(__FILE__, __LINE__, "unexpected cheri exception for data load") },
     TR_Failure(e, _) => { handle_mem_exception(vaddrBits, e); RETIRE_FAIL },
@@ -1221,6 +1261,7 @@ union clause ast = LoadDataDDC : (regidx, regidx, bool, word_width)
  *   - **DDC**.**perms** does not grant **Permit_Load**.
  *   - **DDC**.**address** $+$ *rs1* $\lt$ **DDC**.**base**.
  *   - **DDC**.**address** $+$ *rs1* $+$ *size* $\gt$ **DDC**.**top**.
+ *   - **DDC** is uninitialised and read happens below the cursor.
  */
 function clause execute (LoadDataDDC(rd, rs1, is_unsigned, width)) = {
   let (ddc_val, vaddr) = ddc_and_resulting_addr(X(rs1));
@@ -1240,6 +1281,7 @@ union clause ast = LoadDataCap : (regidx, regidx, bool, word_width)
  *   - *cs1*.**perms** does not grant **Permit_Load**.
  *   - *cs1*.**address** $\lt$ *cs1*.**base**.
  *   - *cs1*.**address** $+$ *size* $\gt$ *cs1*.**top**.
+ *   - **DDC** is uninitialised and read happens below the cursor.
  */
 function clause execute (LoadDataCap(rd, cs1, is_unsigned, width)) = {
   let cs1_val = C(cs1);
@@ -1262,6 +1304,9 @@ function handle_load_cap_via_cap(cd, auth_idx, auth_val, vaddrBits) = {
     RETIRE_FAIL
   } else if not(inCapBounds(auth_val, vaddrBits, cap_size)) then {
     handle_cheri_cap_exception(CapEx_LengthViolation, auth_idx);
+    RETIRE_FAIL
+  } else if check_uninit(auth_val, vaddrBits) then {
+    handle_cheri_cap_exception(CapEx_UninitLoadViolation, auth_idx);
     RETIRE_FAIL
   } else if not(is_aligned_addr(vaddrBits, cap_size)) then {
     handle_mem_exception(vaddrBits, E_Load_Addr_Align());
@@ -1299,6 +1344,7 @@ union clause ast = LoadCapDDC : (regidx, regidx)
  *   - **DDC**.**address** $+$ *rs1* $+$ **CLEN** $/$ 8 $\gt$ **DDC**.**top**.
  *   - **DDC**.**address** $+$ *rs1* is unaligned, regardless of whether the
  *     implementation supports unaligned data accesses.
+ *   - **DDC** is uninitialised and read happens below the cursor.
  */
 function clause execute (LoadCapDDC(cd, rs1)) = {
   let (ddc_val, vaddr) = ddc_and_resulting_addr(X(rs1));
@@ -1321,6 +1367,7 @@ union clause ast = LoadCapCap : (regidx, regidx)
  *   - *cs1*.**address** $+$ **CLEN** $/$ 8 $\gt$ *cs1*.**top**.
  *   - *cs1*.**address** is unaligned, regardless of whether the implementation
  *     supports unaligned data accesses.
+ *   - **DDC** is uninitialised and read happens below the cursor.
  */
 function clause execute (LoadCapCap(cd, cs1)) = {
   let cs1_val = C(cs1);
@@ -1455,6 +1502,9 @@ function handle_loadres_data_via_cap(rd, auth_idx, auth_val, vaddrBits, width) =
   } else if not(inCapBounds(auth_val, vaddrBits, size)) then {
     handle_cheri_cap_exception(CapEx_LengthViolation, auth_idx);
     RETIRE_FAIL
+  } else if check_uninit(auth_val, vaddrBits) then {
+    handle_cheri_cap_exception(CapEx_UninitLoadViolation, auth_idx);
+    RETIRE_FAIL
   } else if check_res_misaligned(vaddrBits, width) then {
     handle_mem_exception(vaddrBits, E_Load_Addr_Align());
     RETIRE_FAIL
@@ -1487,6 +1537,9 @@ if not(auth_val.tag) then {
     RETIRE_FAIL
   } else if not(inCapBounds(auth_val, vaddrBits, cap_size)) then {
     handle_cheri_cap_exception(CapEx_LengthViolation, auth_idx);
+    RETIRE_FAIL
+  } else if check_uninit(auth_val, vaddrBits) then {
+    handle_cheri_cap_exception(CapEx_UninitLoadViolation, auth_idx);
     RETIRE_FAIL
   } else if not(is_aligned_addr(vaddrBits, cap_size)) then {
     handle_mem_exception(vaddrBits, E_Load_Addr_Align());
@@ -2072,6 +2125,9 @@ function clause execute AMOSwapCap(cd, cs2, rs1_cs1, aq, rl) = {
     } else if not(inCapBounds(auth_val, vaddr, cap_size)) then {
       handle_cheri_cap_exception(CapEx_LengthViolation, auth_idx);
       RETIRE_FAIL
+    } else if check_uninit(auth_val, vaddr) then {
+      handle_cheri_cap_exception(CapEx_UninitLoadViolation, auth_idx);
+      RETIRE_FAIL
     } else if not(is_aligned_addr(vaddr, cap_size)) then {
       handle_mem_exception(vaddr, E_SAMO_Addr_Align());
       RETIRE_FAIL
@@ -2112,6 +2168,218 @@ function clause execute AMOSwapCap(cd, cs2, rs1_cs1, aq, rl) = {
   }
 }
 
+//
+/* Uninitialised capability specific instructions */
+// 
+
+/* Getter and modifiers */
+
+union clause ast = CGetUninit       : (regidx, regidx)
+union clause ast = CUninit          : (regidx, regidx)
+union clause ast = CDropUninit      : (regidx, regidx)
+union clause ast = CShrink          : (regidx, regidx, regidx)
+union clause ast = CShrinkImmediate : (regidx, regidx, bits(12))
+
+/*!
+ * Integer register *rd* is set equal to the **uninit** field of the capability
+ * in register *cs1*.
+ *
+ * ## Exceptions
+ *
+ * An exception is raised if:
+ *   - *cs1* is untagged.
+ */
+function clause execute (CGetUninit(rd, cs1)) = {
+  let capVal = C(cs1);
+  if not (capVal.tag) then {
+    handle_cheri_reg_exception(CapEx_TagViolation, cs1);
+    RETIRE_FAIL
+  } else { 
+    X(rd) = zero_extend(bool_to_bits(capVal.uninit));
+    RETIRE_SUCCESS
+  }
+}
+
+/*!
+ * Capability register *cd* is set equal to the capability in register *cs1*,
+ * with the uninit bit set to 1.
+ *
+ * ## Exceptions
+ *
+ * An exception is raised if:
+ *   - *cs1* is untagged;
+ *   - *cs1* is sealed.
+ */
+function clause execute (CUninit(cd, cs1)) = {
+  let capVal = C(cs1);
+  if not (capVal.tag) then {
+    handle_cheri_reg_exception(CapEx_TagViolation, cs1);
+    RETIRE_FAIL
+  } else if isCapSealed(capVal) then {
+    handle_cheri_reg_exception(CapEx_SealViolation, cs1);
+    RETIRE_FAIL
+  } else {
+    C(cd) = { capVal with uninit = true };
+    RETIRE_SUCCESS
+  }
+}
+
+/*!
+ * Capability register *cd* is set equal to the capability in register *cs1*,
+ * with the uninit bit set to 0.
+ *
+ * ## Exceptions
+ *
+ * An exception is raised if:
+ *   - *cs1* is untagged;
+ *   - *cs1* is sealed;
+ *   - *cs1* is not uninitialised;
+ *   - *cs1* has a cursor which is not equal to its base.
+ */
+function clause execute (CDropUninit(cd, cs1)) = {
+  let capVal = C(cs1);
+  let offset = getCapOffset(capVal);
+  if not (capVal.tag) then {
+    handle_cheri_reg_exception(CapEx_TagViolation, cs1);
+    RETIRE_FAIL
+  } else if isCapSealed(capVal) then {
+    handle_cheri_reg_exception(CapEx_SealViolation, cs1);
+    RETIRE_FAIL
+  } else if not (capVal.uninit) | offset != 0 then {
+    handle_cheri_reg_exception(CapEx_UninitViolation, cs1);
+    RETIRE_FAIL
+  } else {
+    C(cd) = { capVal with uninit = false };
+    RETIRE_SUCCESS
+  }
+}
+
+val handle_shrink_cap : (regidx, regidx, Capability, CapAddrBits) -> Retired effect {escape, rreg, wreg} 
+function clause handle_shrink_cap(cd, cs1, cs1_val, newBase) = {
+  let cs1_base = getCapBaseBits(cs1_val);
+  let cs1_top = getCapTopBits(cs1_val);
+  let newTop = (0b0 @ newBase) + (0b0 @ getCapOffsetBits(cs1_val));
+  if not (cs1_val.tag) then {
+    handle_cheri_reg_exception(CapEx_TagViolation, cs1);
+    RETIRE_FAIL
+  } else if isCapSealed(cs1_val) then {
+    handle_cheri_reg_exception(CapEx_SealViolation, cs1);
+    RETIRE_FAIL
+  } else if newBase <_u cs1_base then {
+    handle_cheri_reg_exception(CapEx_LengthViolation, cs1);
+    RETIRE_FAIL
+  } else if cs1_top <_u newTop then {
+    handle_cheri_reg_exception(CapEx_LengthViolation, cs1);
+    RETIRE_FAIL
+  } else {
+    let (bounds_exact, newCap) = setCapBounds(cs1_val, newBase, newTop);
+    let (addr_exact, newCap) = setCapAddr(newCap, cs1_val.address);
+    C(cd) = clearTagIf(newCap, bounds_exact & addr_exact);
+    RETIRE_SUCCESS
+  }
+}
+
+/*!
+ * The capability written to register cd will have a different range of authority, specified by:
+ *   - *cd*.**base** = *rs2*.
+ *   - *cd*.**top** = *cs1*.**cursor**;
+ *
+ * ## Exceptions
+ *
+ * An exception will be raised if:
+ *   - *cs1* is untagged;
+ *   - *cs1* is sealed;
+ *   - The given new base is lower than the original base (*rs2* < *cs1*.**base**);
+ *   - The cursor of *cs1* is higher than its top (*cs1*.**top** < *cs1*.**cursor**).
+ */
+function clause execute (CShrink(cd, cs1, rs2)) = {
+  let cs1_val = C(cs1);
+  let rs2_val = X(rs2);
+  let newBase = to_bits(cap_addr_width, unsigned(rs2_val));
+  handle_shrink_cap(cd, cs1, cs1_val, newBase)
+}
+
+/*!
+ * The capability written to register cd will have a different range of authority, specified by:
+ *   - *cd*.**base** = *cs1*.**base** + *imm12*.
+ *   - *cd*.**top** = *cs1*.**cursor**;
+ * The immediate value *imm12* is unsigned.
+ *
+ * ## Exceptions
+ *
+ * An exception will be raised if:
+ *   - *cs1* is untagged;
+ *   - *cs1* is sealed;
+ *   - The cursor of *cs1* is higher than its top (*cs1*.**top** < *cs1*.**cursor**).
+ */
+function clause execute (CShrinkImmediate(cd, cs1, imm12)) = {
+  let cs1_val = C(cs1);
+  let imm64 : bits(64) = zero_extend(imm12);
+  let newBase = getCapBaseBits(cs1_val) + imm64;
+  handle_shrink_cap(cd, cs1, cs1_val, newBase)
+}
+
+union clause ast = StoreUninitDataCap : (regidx, regidx, regidx, word_width)
+union clause ast = StoreUninitCapCap  : (regidx, regidx, regidx)
+
+/*!
+ * Store *rs2* at address *cs1*.**address** - width.
+ * *cd* is equal to *cs1* except the cursor is set to *cs1*.**address** - width.
+ *
+ * ## Exceptions
+ *
+ * An exception is raised if:
+ *   - *cs1*.**tag** is not set.
+ *   - *cs1* is sealed.
+ *   - *cs1*.**perms** does not grant **Permit_Store**.
+ *   - *cs1*.**address** $\lt$ *cs1*.**base**.
+ *   - *cs1*.**address** $+$ *size* $\gt$ *cs1*.**top**.
+ *   - *cs1* is not uninitialised.
+ */
+function clause execute (StoreUninitDataCap(cd, rs2, cs1, width)) = {
+  let cs1_val = C(cs1);
+  if not(cs1_val.uninit) then {
+    handle_cheri_reg_exception(CapEx_UninitViolation, cs1);
+    RETIRE_FAIL
+  } else {
+    let vaddr = cs1_val.address - word_width_bytes(width);
+    C(cd) = { cs1_val with address = vaddr };
+    handle_store_data_via_cap(rs2, 0b0 @ cs1, cs1_val, vaddr, width)
+  }
+}
+
+/*!
+ * The capability located in memory at (*cs1*.**address** - cap_size) is
+ * replaced with capability register *cs2*.
+ * Capability register *cd* will contain a copy of *cs1* with its cursor
+ * modified to (*cs1*.**address** - cap_size).
+ *
+ * ## Exceptions
+ *
+ * An exception is raised if:
+ *   - *cs1*.**tag** is not set.
+ *   - *cs1* is sealed.
+ *   - *cs1*.**perms** does not grant **Permit_Store**.
+ *   - *cs1*.**perms** does not grant **Permit_Store_Capability** and
+ *     *cs2*.**tag** is set.
+ *   - *cs1*.**perms** does not grant **Permit_Store_Local_Capability**,
+ *     *cs2*.**tag** is set and *cs2*.**perms** does not grant **Global**.
+ *   - *cs1*.**address** $\lt$ *cs1*.**base**.
+ *   - *cs1*.**address** $+$ **CLEN** $\gt$ *cs1*.**top**.
+ *   - *cs1* is not uninitialised.
+ */
+function clause execute (StoreUninitCapCap(cd, cs2, cs1)) = {
+  let cs1_val = C(cs1);
+  if not(cs1_val.uninit) then {
+    handle_cheri_reg_exception(CapEx_UninitViolation, cs1);
+    RETIRE_FAIL
+  } else {
+    let vaddr = cs1_val.address - cap_size;
+    C(cd) = { cs1_val with address = vaddr };
+    handle_store_cap_via_cap(cs2, 0b0 @ cs1, cs1_val, vaddr)
+  }
+}
+
 /*
 NB: Must be careful about order of matching because unused register
 fields are re-used as additional function codes: more specific matches
@@ -2148,6 +2416,10 @@ mapping clause encdec = CRAM(rd, rs1) if (haveXcheri()) <-> 0b1111111 @ 0b01001 
 mapping clause encdec = CClear(q, m3 @ m5)  if (haveXcheri()) <-> 0b1111111 @ 0b01110 @ q : bits(2) @ m3 : bits(3) @ 0b000 @ m5 : regidx @ 0b1011011 if (haveXcheri())
 mapping clause encdec = FPClear(q, m3 @ m5) if (haveXcheri()) <-> 0b1111111 @ 0b10000 @ q : bits(2) @ m3 : bits(3) @ 0b000 @ m5 : regidx @ 0b1011011 if (haveXcheri())
 
+mapping clause encdec = CGetUninit(rd, cs1)  if (haveXcheri()) <-> 0b1111111 @ 0b11001 @ cs1 @ 0b000 @ rd @ 0b1011011 if (haveXcheri())
+mapping clause encdec = CUninit(cd, cs1)     if (haveXcheri()) <-> 0b1111111 @ 0b11010 @ cs1 @ 0b000 @ cd @ 0b1011011 if (haveXcheri())
+mapping clause encdec = CDropUninit(cd, cs1) if (haveXcheri()) <-> 0b1111111 @ 0b11011 @ cs1 @ 0b000 @ cd @ 0b1011011 if (haveXcheri())
+
 mapping clause assembly = CGetPerm(rd, cs1)   <-> "cgetperm"   ^ spc() ^ reg_name(rd) ^ sep() ^ cap_reg_name(cs1)
 mapping clause assembly = CGetFlags(rd, cs1)  <-> "cgetflags"  ^ spc() ^ reg_name(rd) ^ sep() ^ cap_reg_name(cs1)
 mapping clause assembly = CGetType(rd, cs1)   <-> "cgettype"   ^ spc() ^ reg_name(rd) ^ sep() ^ cap_reg_name(cs1)
@@ -2176,6 +2448,10 @@ mapping clause assembly = CRAM(rd, rs1) <-> "cram" ^ spc() ^ reg_name(rd) ^ sep(
 mapping clause assembly = CClear(q, m8)  <-> "cclear"  ^ spc() ^ hex_bits_2(q) ^ sep() ^ hex_bits_8(m8)
 mapping clause assembly = FPClear(q, m8) <-> "fpclear" ^ spc() ^ hex_bits_2(q) ^ sep() ^ hex_bits_8(m8)
 
+mapping clause assembly = CGetUninit(rd, cs1)  <-> "cgetuninit"  ^ spc() ^ reg_name(rd) ^ sep() ^ cap_reg_name(cs1)
+mapping clause assembly = CUninit(rd, cs1)     <-> "cuninit"     ^ spc() ^ reg_name(rd) ^ sep() ^ cap_reg_name(cs1)
+mapping clause assembly = CDropUninit(rd, cs1) <-> "cdropuninit" ^ spc() ^ reg_name(rd) ^ sep() ^ cap_reg_name(cs1)
+
 /* Three arg */
 
 mapping clause encdec = CSeal(cd, cs1, cs2)       if (haveXcheri()) <-> 0b0001011 @ cs2 @ cs1 @ 0b000 @ cd @ 0b1011011 if (haveXcheri())
@@ -2199,8 +2475,12 @@ mapping clause encdec = CSub(rd, cs1, cs2)        if (haveXcheri()) <-> 0b001010
 mapping clause encdec = CTestSubset(rd, cs1, cs2) if (haveXcheri()) <-> 0b0100000 @ cs2 @ cs1 @ 0b000 @ rd @ 0b1011011 if (haveXcheri())
 mapping clause encdec = CSpecialRW(cd, scr, cs1)  if (haveXcheri()) <-> 0b0000001 @ scr @ cs1 @ 0b000 @ cd @ 0b1011011 if (haveXcheri())
 
+mapping clause encdec = CShrink(cd, cs1, rs2)     if (haveXcheri() & sizeof(xlen) == 64) <-> 0b0100010 @ rs2 @ cs1 @ 0b000 @ cd @ 0b1011011 if (haveXcheri() & sizeof(xlen) == 64)
+
 mapping clause encdec = CIncOffsetImmediate(cd, cs1, imm12) if (haveXcheri()) <-> imm12 : bits(12) @ cs1 @ 0b001 @ cd @ 0b1011011 if (haveXcheri())
 mapping clause encdec = CSetBoundsImmediate(cd, cs1, imm12) if (haveXcheri()) <-> imm12 : bits(12) @ cs1 @ 0b010 @ cd @ 0b1011011 if (haveXcheri())
+
+mapping clause encdec = CShrinkImmediate(cd, cs1, imm12) if (haveXcheri() & sizeof(xlen) == 64) <-> imm12 : bits(12) @ cs1 @ 0b011 @ cd @ 0b1011011 if (haveXcheri() & sizeof(xlen) == 64)
 
 mapping clause encdec = CSEQX(rd, cs1, cs2) if (haveXcheri()) <-> 0b0100001 @ cs2 @ cs1 @ 0b000 @ rd @ 0b1011011 if (haveXcheri())
 
@@ -2226,8 +2506,12 @@ mapping clause assembly = CTestSubset(rd, cs1, cs2) <-> "ctestsubset" ^ spc() ^ 
 
 mapping clause assembly = CSpecialRW(cd, scr, cs1) <-> "cspecialrw"  ^ spc() ^ cap_reg_name(cd) ^ sep() ^ scr_name_map(scr) ^ sep() ^ cap_reg_name(cs1)
 
+mapping clause assembly = CShrink(cd, cs1, rs2) <-> "cshrink" ^ spc() ^ cap_reg_name(cd) ^ sep() ^ cap_reg_name(cs1) ^ sep() ^ reg_name(rs2)
+
 mapping clause assembly = CIncOffsetImmediate(cd, cs1, imm12) <-> "cincoffsetimm" ^ spc() ^ cap_reg_name(cd) ^ sep() ^ cap_reg_name(cs1) ^ sep() ^ hex_bits_12(imm12)
 mapping clause assembly = CSetBoundsImmediate(cd, cs1, imm12) <-> "csetboundsimm" ^ spc() ^ cap_reg_name(cd) ^ sep() ^ cap_reg_name(cs1) ^ sep() ^ hex_bits_12(imm12)
+
+mapping clause assembly = CShrinkImmediate(cd, cs1, imm12) <-> "cshrinkimm" ^ spc() ^ cap_reg_name(cd) ^ sep() ^ cap_reg_name(cs1) ^ sep() ^ hex_bits_12(imm12)
 
 mapping clause assembly = CSEQX(rd, cs1, cs2) <-> "cseqx" ^ spc() ^ reg_name(rd) ^ sep() ^ cap_reg_name(cs1) ^ sep() ^ cap_reg_name(cs2)
 
@@ -2306,6 +2590,12 @@ mapping clause encdec = StoreCondCap(rs2, cs1, DOUBLE) if (haveXcheri() & haveAt
 mapping clause encdec = StoreCondCapCap(cs2, cs1)      if (haveXcheri() & haveAtomics() & sizeof(xlen) == 32) <-> 0b1111100 @ cs2 @ cs1 @ 0b000 @ 0b11011 @ 0b1011011 if (haveXcheri() & haveAtomics() & sizeof(xlen) == 32) /* sc.c.cap */
 mapping clause encdec = StoreCondCapCap(cs2, cs1)      if (haveXcheri() & haveAtomics() & sizeof(xlen) == 64) <-> 0b1111100 @ cs2 @ cs1 @ 0b000 @ 0b11100 @ 0b1011011 if (haveXcheri() & haveAtomics() & sizeof(xlen) == 64) /* sc.c.cap */
 
+mapping clause encdec = StoreUninitDataCap(cd, rs2, cs1, BYTE)   if (haveXcheri() & sizeof(xlen) == 64) <-> 0b1110111 @ rs2 @ cs1 @ 0b000 @ cd @ 0b1011011 if (haveXcheri() & haveRV64) /* usb */
+mapping clause encdec = StoreUninitDataCap(cd, rs2, cs1, HALF)   if (haveXcheri() & sizeof(xlen) == 64) <-> 0b1111000 @ rs2 @ cs1 @ 0b000 @ cd @ 0b1011011 if (haveXcheri() & haveRV64) /* ush */
+mapping clause encdec = StoreUninitDataCap(cd, rs2, cs1, WORD)   if (haveXcheri() & sizeof(xlen) == 64) <-> 0b1111001 @ rs2 @ cs1 @ 0b000 @ cd @ 0b1011011 if (haveXcheri() & haveRV64) /* usw */
+mapping clause encdec = StoreUninitDataCap(cd, rs2, cs1, DOUBLE) if (haveXcheri() & sizeof(xlen) == 64) <-> 0b1111010 @ rs2 @ cs1 @ 0b000 @ cd @ 0b1011011 if (haveXcheri() & haveRV64) /* usd */
+mapping clause encdec = StoreUninitCapCap(cd, cs2, cs1)          if (haveXcheri() & sizeof(xlen) == 64) <-> 0b1111011 @ cs2 @ cs1 @ 0b000 @ cd @ 0b1011011 if (haveXcheri() & haveRV64) /* usc */
+
 mapping clause assembly = LoadDataDDC(rd, rs1, u, w) <-> "l" ^ size_mnemonic(w) ^ maybe_u(u) ^ ".ddc" ^ spc() ^ reg_name(rd) ^ sep() ^ "(" ^ opt_spc() ^ reg_name(rs1) ^ opt_spc() ^ ")"
 mapping clause assembly = LoadDataCap(rd, cs1, u, w) <-> "l" ^ size_mnemonic(w) ^ maybe_u(u) ^ ".cap" ^ spc() ^ reg_name(rd) ^ sep() ^ "(" ^ opt_spc() ^ cap_reg_name(cs1) ^ opt_spc() ^ ")"
 mapping clause assembly = LoadCapDDC(cd, rs1)        <-> "lc.ddc" ^ spc() ^ cap_reg_name(cd) ^ sep() ^ "(" ^ opt_spc() ^ reg_name(rs1) ^ opt_spc() ^ ")"
@@ -2325,6 +2615,9 @@ mapping clause assembly = StoreCondDataDDC(rs2, rs1, w) <-> "sc." ^ size_mnemoni
 mapping clause assembly = StoreCondCapDDC(cs2, rs1)     <-> "sc.c.ddc" ^ spc() ^ cap_reg_name(cs2) ^ sep() ^ "(" ^ opt_spc() ^ reg_name(rs1) ^ opt_spc() ^ ")"
 mapping clause assembly = StoreCondCap(rs2, cs1, w)     <-> "sc." ^ size_mnemonic(w) ^ ".cap" ^ spc() ^ reg_name(rs2) ^ sep() ^ "(" ^ opt_spc() ^ cap_reg_name(cs1) ^ opt_spc() ^ ")"
 mapping clause assembly = StoreCondCapCap(cs2, cs1)     <-> "sc.c.cap" ^ spc() ^ cap_reg_name(cs2) ^ sep() ^ "(" ^ opt_spc() ^ cap_reg_name(cs1) ^ opt_spc() ^ ")"
+
+mapping clause assembly = StoreUninitDataCap(cd, rs2, cs1, w) <-> "us" ^ size_mnemonic(w) ^ spc() ^ cap_reg_name(cd) ^ sep() ^ reg_name(rs2) ^ sep() ^ "(" ^ opt_spc() ^ cap_reg_name(cs1) ^ opt_spc() ^ ")"
+mapping clause assembly = StoreUninitCapCap(cd, cs2, cs1)     <-> "usc" ^ spc() ^ cap_reg_name(cd) ^ sep() ^ cap_reg_name(cs2) ^ sep() ^ "(" ^ opt_spc() ^ cap_reg_name(cs1) ^ opt_spc() ^ ")"
 
 mapping clause encdec = LoadCapImm(cd, rs1, offset) if sizeof(xlen) == 64 <-> offset @ rs1 @ 0b010 @ cd @ 0b0001111 if sizeof(xlen) == 64 /* lc */
 mapping clause encdec = LoadCapImm(cd, rs1, offset) if sizeof(xlen) == 32 <-> offset @ rs1 @ 0b011 @ cd @ 0b0000011 if sizeof(xlen) == 32 /* lc */

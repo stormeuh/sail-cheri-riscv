@@ -202,7 +202,10 @@ function ext_data_get_addr(base_reg : regidx, offset : xlenbits, acc : AccessTyp
     Write(_)              => internal_error(__FILE__, __LINE__, "ext_data_get_addr for Write(_)"),
     ReadWrite(_, _)       => internal_error(__FILE__, __LINE__, "ext_data_get_addr for ReadWrite(_, _)")
   };
-
+  let not_write : bool = match acc {
+    Write(_) => false,
+    _        => true
+  };
   if not(auth_val.tag) then
     Ext_DataAddr_Error(CapEx_TagViolation, auth_idx)
   else if isCapSealed(auth_val) then
@@ -213,6 +216,8 @@ function ext_data_get_addr(base_reg : regidx, offset : xlenbits, acc : AccessTyp
     Ext_DataAddr_Error(CapEx_PermitStoreViolation, auth_idx)
   else if not(inCapBounds(auth_val, newAddr, word_width_bytes(width))) then
     Ext_DataAddr_Error(CapEx_LengthViolation, auth_idx)
+  else if not_write & check_uninit(auth_val, newAddr) then
+    Ext_DataAddr_Error(CapEx_UninitLoadViolation, auth_idx)
   else
     Ext_DataAddr_OK(newAddr)
 }
