@@ -1570,7 +1570,7 @@ function clause execute (CInvokeLAL(cd, cs)) = {
       handle_mem_exception(idcaddr, E_Load_Addr_Align());
       RETIRE_FAIL
     } else {
-      match load_cap_via_cap(0b0 @ cs, cs_val, idcaddr, false, false) {
+      match load_cap_via_cap(0b0 @ cs, idc, idcaddr, false, false) {
         None() => RETIRE_FAIL,
         Some(_,v) => match cjalr_worker(cd, cs, v, zeros()) {
           RETIRE_FAIL => RETIRE_FAIL,
@@ -2348,8 +2348,8 @@ mapping clause encdec = JALR_PCC(rd, rs1)   if (haveXcheri()) <-> 0b1111111 @ 0b
 
 mapping clause encdec = CLoadTags(rd, cs1) if (haveXcheri()) <-> 0b1111111 @ 0b10010 @ cs1 @ 0b000 @ rd @ 0b1011011 if (haveXcheri())
 
-mapping clause encdec = CSealL(cd, cs1)     if (haveXcheri()) <-> 0b1111111 @ 0b11000 @ cs1 @ 0b000 @ cd @ 0b1011011 if (haveXcheri())
-mapping clause encdec = CInvokeLAL(cd, cs1) if (haveXcheri()) <-> 0b1111111 @ 0b11001 @ cs1 @ 0b000 @ cd @ 0b1011011 if (haveXcheri())
+mapping clause encdec = CSealL(cd, cs1)     if (haveXcheri()) <-> 0b1111111 @ 0b11001 @ cs1 @ 0b000 @ cd @ 0b1011011 if (haveXcheri())
+mapping clause encdec = CInvokeLAL(cd, cs1) if (haveXcheri()) <-> 0b1111111 @ 0b11010 @ cs1 @ 0b000 @ cd @ 0b1011011 if (haveXcheri())
 
 mapping clause encdec = CRRL(rd, rs1) if (haveXcheri()) <-> 0b1111111 @ 0b01000 @ rs1 @ 0b000 @ rd @ 0b1011011 if (haveXcheri())
 mapping clause encdec = CRAM(rd, rs1) if (haveXcheri()) <-> 0b1111111 @ 0b01001 @ rs1 @ 0b000 @ rd @ 0b1011011 if (haveXcheri())
