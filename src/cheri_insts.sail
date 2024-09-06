@@ -2477,7 +2477,7 @@ function clause handle_shrink_cap(cd, cs1, cs1_val, newBase) = {
   } else {
     let (bounds_exact, newCap) = setCapBounds(cs1_val, newBase, newTop);
     let (addr_exact, newCap) = setCapAddr(newCap, cs1_val.address);
-    C(cd) = clearTagIf(newCap, bounds_exact & addr_exact);
+    C(cd) = clearTagIf(newCap, not (bounds_exact & addr_exact));
     RETIRE_SUCCESS
   }
 }
