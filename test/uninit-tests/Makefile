@@ -1,3 +1,4 @@
+CLANG?=clang
 # The CLANG env variable should be set to the path to the custom clang compiler
 TESTS = test-CGetUninit.elf \
 	test-CUninit.elf \

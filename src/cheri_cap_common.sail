@@ -470,10 +470,12 @@ function inCapBounds (cap, addr, size) = {
  * Load from given address using given authorizing capability is checked for
  * violation of uninitialised capability.
  */
-val check_uninit : (Capability, CapAddrBits) -> bool
-function check_uninit (auth_val, addr) = {
+function checkUninit (auth_val, addr) : (Capability, CapAddrBits) -> bool = {
   auth_val.uninit & (addr <_u auth_val.address) 
 }
+
+function setUninit(cap) : Capability -> Capability =
+    {cap with uninit = true}
 
 function clearUninit(cap) : Capability -> Capability =
     {cap with uninit = false}
