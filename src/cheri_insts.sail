@@ -652,7 +652,7 @@ union clause ast = CSetBounds : (regidx, regidx, regidx)
  * will be rounded up by the smallest amount needed to form a representable
  * capability covering the requested bounds. The **tag** field of the result
  * is cleared if the bounds of the result exceed the bounds of *cs1*, or if
- * *cs1* was sealed.
+ * *cs1* was sealed. Uninit is dropped if present.
  */
 function clause execute (CSetBounds(cd, cs1, rs2)) = {
   let cs1_val = C(cs1);
@@ -665,7 +665,10 @@ function clause execute (CSetBounds(cd, cs1, rs2)) = {
   let inCap = clearTagIfSealed(cs1_val);
   let (_, newCap) = setCapBounds(inCap, newBase, newTop);
 
-  C(cd) = clearTagIf(newCap, not(inBounds)); /* ignore exact */
+  assert(not(cs1_val.uninit & (newCap.address <_u cs1_val.address)),
+         "Uninit cap cursor may not be moved down!");
+
+  C(cd) = clearTagIf(clearUninit(newCap), not(inBounds)); /* ignore exact */
   RETIRE_SUCCESS
 }
 
@@ -677,7 +680,8 @@ union clause ast = CSetBoundsImmediate : (regidx, regidx, bits(12))
  * exactly the **base** will be rounded down and the **length** will be rounded
  * up by the smallest amount needed to form a representable capability covering
  * the requested bounds. The **tag** field of the result is cleared if the
- * bounds of the result exceed the bounds of *cs1*, or if *cs1* was sealed.
+ * bounds of the result exceed the bounds of *cs1*, or if *cs1* was sealed.*/
+/* Uninit is dropped if present.
  */
 function clause execute (CSetBoundsImmediate(cd, cs1, uimm)) = {
   let cs1_val = C(cs1);
@@ -689,7 +693,10 @@ function clause execute (CSetBoundsImmediate(cd, cs1, uimm)) = {
   let inCap = clearTagIfSealed(cs1_val);
   let (_, newCap) = setCapBounds(inCap, newBase, newTop);
 
-  C(cd) = clearTagIf(newCap, not(inBounds)); /* ignore exact */
+  assert(not(cs1_val.uninit & (newCap.address <_u cs1_val.address)),
+         "Uninit cap cursor may not be moved down!");
+
+  C(cd) = clearTagIf(clearUninit(newCap), not(inBounds)); /* ignore exact */
   RETIRE_SUCCESS
 }
 
@@ -703,7 +710,7 @@ union clause ast = CSetBoundsExact : (regidx, regidx, regidx)
  * rounded up by the smallest amount needed to form a representable capability
  * covering the requested bounds. The **tag** field of the result is cleared
  * if the bounds of the result exceed the bounds of *cs1*, or if *cs1* was
- * sealed.
+ * sealed. Uninit is dropped if present.
  */
 function clause execute (CSetBoundsExact(cd, cs1, rs2)) = {
   let cs1_val = C(cs1);
@@ -716,7 +723,10 @@ function clause execute (CSetBoundsExact(cd, cs1, rs2)) = {
   let inCap = clearTagIfSealed(cs1_val);
   let (exact, newCap) = setCapBounds(inCap, newBase, newTop);
 
-  C(cd) = clearTagIf(newCap, not(inBounds & exact));
+  assert(not(cs1_val.uninit & (newCap.address <_u cs1_val.address)),
+         "Uninit cap cursor may not be moved down!");
+
+  C(cd) = clearTagIf(clearUninit(newCap), not(inBounds & exact));
   RETIRE_SUCCESS
 }
 
@@ -1278,7 +1288,7 @@ function handle_load_data_via_cap(rd, auth_idx, auth_val, vaddrBits, is_unsigned
   } else if check_misaligned(vaddrBits, width) then {
     handle_mem_exception(vaddrBits, E_Load_Addr_Align());
     RETIRE_FAIL
-  } else if check_uninit(auth_val, vaddrBits) then {
+  } else if checkUninit(auth_val, vaddrBits) then {
     handle_cheri_cap_exception(CapEx_UninitLoadViolation, auth_idx);
     RETIRE_FAIL
   } else match translateAddr(vaddrBits, Read(Data)) {
@@ -1357,7 +1367,7 @@ function load_cap_via_cap(auth_idx, auth_val, vaddrBits, aq, rl) = {
   } else if not(inCapBounds(auth_val, vaddrBits, cap_size)) then {
     handle_cheri_cap_exception(CapEx_LengthViolation, auth_idx);
     None()
-  } else if check_uninit(auth_val, vaddrBits) then {
+  } else if checkUninit(auth_val, vaddrBits) then {
     handle_cheri_cap_exception(CapEx_UninitLoadViolation, auth_idx);
     None()
   } else if not(is_aligned_addr(vaddrBits, cap_size)) then {
@@ -1741,7 +1751,7 @@ function handle_loadres_data_via_cap(rd, auth_idx, auth_val, vaddrBits, width) =
   } else if not(inCapBounds(auth_val, vaddrBits, size)) then {
     handle_cheri_cap_exception(CapEx_LengthViolation, auth_idx);
     RETIRE_FAIL
-  } else if check_uninit(auth_val, vaddrBits) then {
+  } else if checkUninit(auth_val, vaddrBits) then {
     handle_cheri_cap_exception(CapEx_UninitLoadViolation, auth_idx);
     RETIRE_FAIL
   } else if check_res_misaligned(vaddrBits, width) then {
@@ -2328,7 +2338,7 @@ function clause execute AMOSwapCap(cd, cs2, rs1_cs1, aq, rl) = {
     } else if not(inCapBounds(auth_val, vaddr, cap_size)) then {
       handle_cheri_cap_exception(CapEx_LengthViolation, auth_idx);
       RETIRE_FAIL
-    } else if check_uninit(auth_val, vaddr) then {
+    } else if checkUninit(auth_val, vaddr) then {
       handle_cheri_cap_exception(CapEx_UninitLoadViolation, auth_idx);
       RETIRE_FAIL
     } else if not(is_aligned_addr(vaddr, cap_size)) then {
@@ -2386,97 +2396,57 @@ union clause ast = CShrinkImmediate : (regidx, regidx, bits(12))
 /*!
  * Integer register *rd* is set equal to the **uninit** field of the capability
  * in register *cs1*.
- *
- * ## Exceptions
- *
- * An exception is raised if:
- *   - *cs1* is untagged.
  */
 function clause execute (CGetUninit(rd, cs1)) = {
   let capVal = C(cs1);
-  if not (capVal.tag) then {
-    handle_cheri_reg_exception(CapEx_TagViolation, cs1);
-    RETIRE_FAIL
-  } else { 
-    X(rd) = zero_extend(bool_to_bits(capVal.uninit));
-    RETIRE_SUCCESS
-  }
+
+  X(rd) = zero_extend(bool_to_bits(capVal.uninit));
+  RETIRE_SUCCESS
 }
 
 /*!
  * Capability register *cd* is set equal to the capability in register *cs1*,
- * with the uninit bit set to 1.
- *
- * ## Exceptions
- *
- * An exception is raised if:
- *   - *cs1* is untagged;
- *   - *cs1* is sealed.
+ * with the uninit bit set to 1. Tag is cleared if the capability is sealed.
  */
 function clause execute (CUninit(cd, cs1)) = {
   let capVal = C(cs1);
-  if not (capVal.tag) then {
-    handle_cheri_reg_exception(CapEx_TagViolation, cs1);
-    RETIRE_FAIL
-  } else if isCapSealed(capVal) then {
-    handle_cheri_reg_exception(CapEx_SealViolation, cs1);
-    RETIRE_FAIL
-  } else {
-    C(cd) = { capVal with uninit = true };
-    RETIRE_SUCCESS
-  }
+
+  C(cd) = clearTagIfSealed(setUninit(capVal));
+  RETIRE_SUCCESS
 }
 
 /*!
  * Capability register *cd* is set equal to the capability in register *cs1*,
- * with the uninit bit set to 0.
- *
- * ## Exceptions
- *
- * An exception is raised if:
- *   - *cs1* is untagged;
- *   - *cs1* is sealed;
- *   - *cs1* is not uninitialised;
- *   - *cs1* has a cursor which is not equal to its base.
+ * with the uninit bit set to 0. Tag is cleared if the capability is sealed.
  */
 function clause execute (CDropUninit(cd, cs1)) = {
   let capVal = C(cs1);
   let offset = getCapOffset(capVal);
-  if not (capVal.tag) then {
-    handle_cheri_reg_exception(CapEx_TagViolation, cs1);
-    RETIRE_FAIL
-  } else if isCapSealed(capVal) then {
-    handle_cheri_reg_exception(CapEx_SealViolation, cs1);
-    RETIRE_FAIL
-  } else if not (capVal.uninit) | offset != 0 then {
+
+  if offset != 0 then {
     handle_cheri_reg_exception(CapEx_UninitViolation, cs1);
     RETIRE_FAIL
   } else {
-    C(cd) = { capVal with uninit = false };
+    C(cd) = clearTagIfSealed(clearUninit(capVal));
     RETIRE_SUCCESS
   }
 }
 
 val handle_shrink_cap : (regidx, regidx, Capability, CapAddrBits) -> Retired effect {escape, rreg, wreg} 
 function clause handle_shrink_cap(cd, cs1, cs1_val, newBase) = {
-  let cs1_base = getCapBaseBits(cs1_val);
-  let cs1_top = getCapTopBits(cs1_val);
-  let newTop = (0b0 @ newBase) + (0b0 @ getCapOffsetBits(cs1_val));
-  if not (cs1_val.tag) then {
-    handle_cheri_reg_exception(CapEx_TagViolation, cs1);
-    RETIRE_FAIL
-  } else if isCapSealed(cs1_val) then {
-    handle_cheri_reg_exception(CapEx_SealViolation, cs1);
-    RETIRE_FAIL
-  } else if newBase <_u cs1_base then {
+  let inCap = clearTagIfSealed(cs1_val);
+  let cs1_base = getCapBaseBits(inCap);
+  let cs1_top = getCapTopBits(inCap);
+  let newTop = (0b0 @ newBase) + (0b0 @ getCapOffsetBits(inCap));
+  if newBase <_u cs1_base then {
     handle_cheri_reg_exception(CapEx_LengthViolation, cs1);
     RETIRE_FAIL
   } else if cs1_top <_u newTop then {
     handle_cheri_reg_exception(CapEx_LengthViolation, cs1);
     RETIRE_FAIL
   } else {
-    let (bounds_exact, newCap) = setCapBounds(cs1_val, newBase, newTop);
-    let (addr_exact, newCap) = setCapAddr(newCap, cs1_val.address);
+    let (bounds_exact, newCap) = setCapBounds(inCap, newBase, newTop);
+    let (addr_exact, newCap) = setCapAddr(newCap, inCap.address);
     C(cd) = clearTagIf(newCap, not (bounds_exact & addr_exact));
     RETIRE_SUCCESS
   }
@@ -2486,12 +2456,11 @@ function clause handle_shrink_cap(cd, cs1, cs1_val, newBase) = {
  * The capability written to register cd will have a different range of authority, specified by:
  *   - *cd*.**base** = *rs2*.
  *   - *cd*.**top** = *cs1*.**cursor**;
+ * Tag will be cleared if the capability is sealed.
  *
  * ## Exceptions
  *
  * An exception will be raised if:
- *   - *cs1* is untagged;
- *   - *cs1* is sealed;
  *   - The given new base is lower than the original base (*rs2* < *cs1*.**base**);
  *   - The cursor of *cs1* is higher than its top (*cs1*.**top** < *cs1*.**cursor**).
  */
@@ -2507,13 +2476,12 @@ function clause execute (CShrink(cd, cs1, rs2)) = {
  *   - *cd*.**base** = *cs1*.**base** + *imm12*.
  *   - *cd*.**top** = *cs1*.**cursor**;
  * The immediate value *imm12* is unsigned.
+ * Tag will be cleared if the capability is sealed.
  *
  * ## Exceptions
  *
- * An exception will be raised if:
- *   - *cs1* is untagged;
- *   - *cs1* is sealed;
- *   - The cursor of *cs1* is higher than its top (*cs1*.**top** < *cs1*.**cursor**).
+ * An exception will be raised if the cursor of *cs1* is higher than its top
+ * (*cs1*.**top** < *cs1*.**cursor**).
  */
 function clause execute (CShrinkImmediate(cd, cs1, imm12)) = {
   let cs1_val = C(cs1);

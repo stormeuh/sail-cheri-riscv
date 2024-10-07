@@ -1,3 +1,4 @@
+CLANG?=clang
 # The CLANG env variable should be set to the path to the custom clang compiler
 TESTS = test-CGetUninit.elf \
 	test-CUninit.elf \
@@ -6,7 +7,8 @@ TESTS = test-CGetUninit.elf \
 	test-StoreUninit.elf \
 	test-LoadUninit.elf \
 	test-LoadUninitCapMode.elf \
-	test-AMO.elf 
+	test-AMO.elf \
+	test-CSetBounds.elf
 
 FLAGS = -nostdlib -Ttext 0x80000000 --target=riscv64-unknown-freebsd -march=rv64gxcheri -mno-relax -fuse-ld=lld
 

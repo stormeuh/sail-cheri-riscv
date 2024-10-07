@@ -216,7 +216,7 @@ function ext_data_get_addr(base_reg : regidx, offset : xlenbits, acc : AccessTyp
     Ext_DataAddr_Error(CapEx_PermitStoreViolation, auth_idx)
   else if not(inCapBounds(auth_val, newAddr, word_width_bytes(width))) then
     Ext_DataAddr_Error(CapEx_LengthViolation, auth_idx)
-  else if not_write & check_uninit(auth_val, newAddr) then
+  else if not_write & checkUninit(auth_val, newAddr) then
     Ext_DataAddr_Error(CapEx_UninitLoadViolation, auth_idx)
   else
     Ext_DataAddr_OK(newAddr)
