@@ -635,7 +635,7 @@ union clause ast = CSetBounds : (regidx, regidx, regidx)
  * will be rounded up by the smallest amount needed to form a representable
  * capability covering the requested bounds. The **tag** field of the result
  * is cleared if the bounds of the result exceed the bounds of *cs1*, or if
- * *cs1* was sealed.
+ * *cs1* was sealed. Uninit is dropped if present.
  */
 function clause execute (CSetBounds(cd, cs1, rs2)) = {
   let cs1_val = C(cs1);
@@ -648,7 +648,10 @@ function clause execute (CSetBounds(cd, cs1, rs2)) = {
   let inCap = clearTagIfSealed(cs1_val);
   let (_, newCap) = setCapBounds(inCap, newBase, newTop);
 
-  C(cd) = clearTagIf(newCap, not(inBounds)); /* ignore exact */
+  assert(not(cs1_val.uninit & (newCap.address <_u cs1_val.address)),
+         "Uninit cap cursor may not be moved down!");
+
+  C(cd) = clearTagIf(clearUninit(newCap), not(inBounds)); /* ignore exact */
   RETIRE_SUCCESS
 }
 
@@ -660,7 +663,8 @@ union clause ast = CSetBoundsImmediate : (regidx, regidx, bits(12))
  * exactly the **base** will be rounded down and the **length** will be rounded
  * up by the smallest amount needed to form a representable capability covering
  * the requested bounds. The **tag** field of the result is cleared if the
- * bounds of the result exceed the bounds of *cs1*, or if *cs1* was sealed.
+ * bounds of the result exceed the bounds of *cs1*, or if *cs1* was sealed.*/
+/* Uninit is dropped if present.
  */
 function clause execute (CSetBoundsImmediate(cd, cs1, uimm)) = {
   let cs1_val = C(cs1);
@@ -672,7 +676,10 @@ function clause execute (CSetBoundsImmediate(cd, cs1, uimm)) = {
   let inCap = clearTagIfSealed(cs1_val);
   let (_, newCap) = setCapBounds(inCap, newBase, newTop);
 
-  C(cd) = clearTagIf(newCap, not(inBounds)); /* ignore exact */
+  assert(not(cs1_val.uninit & (newCap.address <_u cs1_val.address)),
+         "Uninit cap cursor may not be moved down!");
+
+  C(cd) = clearTagIf(clearUninit(newCap), not(inBounds)); /* ignore exact */
   RETIRE_SUCCESS
 }
 
@@ -686,7 +693,7 @@ union clause ast = CSetBoundsExact : (regidx, regidx, regidx)
  * rounded up by the smallest amount needed to form a representable capability
  * covering the requested bounds. The **tag** field of the result is cleared
  * if the bounds of the result exceed the bounds of *cs1*, or if *cs1* was
- * sealed.
+ * sealed. Uninit is dropped if present.
  */
 function clause execute (CSetBoundsExact(cd, cs1, rs2)) = {
   let cs1_val = C(cs1);
@@ -699,7 +706,10 @@ function clause execute (CSetBoundsExact(cd, cs1, rs2)) = {
   let inCap = clearTagIfSealed(cs1_val);
   let (exact, newCap) = setCapBounds(inCap, newBase, newTop);
 
-  C(cd) = clearTagIf(newCap, not(inBounds & exact));
+  assert(not(cs1_val.uninit & (newCap.address <_u cs1_val.address)),
+         "Uninit cap cursor may not be moved down!");
+
+  C(cd) = clearTagIf(clearUninit(newCap), not(inBounds & exact));
   RETIRE_SUCCESS
 }
 

@@ -475,6 +475,9 @@ function check_uninit (auth_val, addr) = {
   auth_val.uninit & (addr <_u auth_val.address) 
 }
 
+function clearUninit(cap) : Capability -> Capability =
+    {cap with uninit = false}
+
 function getCapCursor(cap) : Capability -> CapAddrInt = unsigned(cap.address)
 
 function int_to_cap (offset) : CapAddrBits -> Capability =
