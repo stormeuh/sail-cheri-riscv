@@ -663,13 +663,18 @@ function clause execute (CSetBounds(cd, cs1, rs2)) = {
   let inBounds = inCapBounds(cs1_val, newBase, unsigned(rs2_val));
 
   let inCap = clearTagIfSealed(cs1_val);
-  let (_, newCap) = setCapBounds(inCap, newBase, newTop);
+  let (exact, newCap) = setCapBounds(inCap, newBase, newTop);
 
   assert(not(cs1_val.uninit & (newCap.address <_u cs1_val.address)),
          "Uninit cap cursor may not be moved down!");
 
-  C(cd) = clearTagIf(clearUninit(newCap), not(inBounds)); /* ignore exact */
-  RETIRE_SUCCESS
+  if cs1_val.uninit & not(exact) & (getCapBaseBits(newCap) <_u cs1_val.address) then {
+    handle_cheri_reg_exception(CapEx_UninitViolation, cs1);
+    RETIRE_FAIL
+  } else {
+    C(cd) = clearTagIf(clearUninit(newCap), not(inBounds)); /* ignore exact */
+    RETIRE_SUCCESS
+  }
 }
 
 union clause ast = CSetBoundsImmediate : (regidx, regidx, bits(12))
@@ -691,13 +696,18 @@ function clause execute (CSetBoundsImmediate(cd, cs1, uimm)) = {
   let inBounds = inCapBounds(cs1_val, newBase, unsigned(uimm));
 
   let inCap = clearTagIfSealed(cs1_val);
-  let (_, newCap) = setCapBounds(inCap, newBase, newTop);
+  let (exact, newCap) = setCapBounds(inCap, newBase, newTop);
 
   assert(not(cs1_val.uninit & (newCap.address <_u cs1_val.address)),
          "Uninit cap cursor may not be moved down!");
 
-  C(cd) = clearTagIf(clearUninit(newCap), not(inBounds)); /* ignore exact */
-  RETIRE_SUCCESS
+  if cs1_val.uninit & not(exact) & (getCapBaseBits(newCap) <_u cs1_val.address) then {
+    handle_cheri_reg_exception(CapEx_UninitViolation, cs1);
+    RETIRE_FAIL
+  } else {
+    C(cd) = clearTagIf(clearUninit(newCap), not(inBounds)); /* ignore exact */
+    RETIRE_SUCCESS
+  }
 }
 
 union clause ast = CSetBoundsExact : (regidx, regidx, regidx)
@@ -726,8 +736,13 @@ function clause execute (CSetBoundsExact(cd, cs1, rs2)) = {
   assert(not(cs1_val.uninit & (newCap.address <_u cs1_val.address)),
          "Uninit cap cursor may not be moved down!");
 
-  C(cd) = clearTagIf(clearUninit(newCap), not(inBounds & exact));
-  RETIRE_SUCCESS
+  if cs1_val.uninit & not(exact) & (getCapBaseBits(newCap) <_u cs1_val.address) then {
+    handle_cheri_reg_exception(CapEx_UninitViolation, cs1);
+    RETIRE_FAIL
+  } else {
+    C(cd) = clearTagIf(clearUninit(newCap), not(inBounds & exact));
+    RETIRE_SUCCESS
+  }
 }
 
 union clause ast = CClearTag : (regidx, regidx)

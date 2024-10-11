@@ -12,7 +12,7 @@ TESTS = test-CGetUninit.elf \
 
 FLAGS = -nostdlib -Ttext 0x80000000 --target=riscv64-unknown-freebsd -march=rv64gxcheri -mno-relax -fuse-ld=lld
 
-SAIL_RISCV_SIM = ../../ocaml_emulator/cheri_riscv_ocaml_sim_RV64
+SAIL_RISCV_SIM = ../../c_emulator/cheri_riscv_sim_RV64
 
 all: $(TESTS)
 
@@ -24,9 +24,6 @@ all: $(TESTS)
 
 %.out: %.elf
 	@$(SAIL_RISCV_SIM) $< > $@
-
-# %.result: %.out
-#	$
 
 clean:
 	rm -rf *.elf *.out *.cout
