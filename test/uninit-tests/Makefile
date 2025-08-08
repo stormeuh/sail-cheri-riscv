@@ -10,7 +10,7 @@ TESTS = test-CGetUninit.elf \
 	test-AMO.elf \
 	test-CSetBounds.elf
 
-FLAGS = -nostdlib -Ttext 0x80000000 --target=riscv64-unknown-freebsd -march=rv64gxcheri -mno-relax -fuse-ld=lld
+FLAGS = -nostdlib -Ttext 0x80000000 --target=riscv64-unknown-freebsd -march=rv64gxcheri -mno-relax -fuse-ld=lld -g
 
 SAIL_RISCV_SIM = ../../c_emulator/cheri_riscv_sim_RV64
 

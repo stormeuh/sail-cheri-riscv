@@ -544,11 +544,11 @@ function clause execute (CIncOffset(cd, cs1, rs2)) = {
   let rs2_val = X(rs2);
 
   let inCap = clearTagIfSealed(cs1_val);
-  if inCap.tag & inCap.uninit & bit_to_bool(rs2_val[63]) then {
+  let (success, newCap) = incCapOffset(inCap, rs2_val);
+  if inCap.tag & checkUninit(cs1_val, newCap.address) then {
     handle_cheri_reg_exception(CapEx_UninitViolation, cs1);
     RETIRE_FAIL
   } else {
-    let (success, newCap) = incCapOffset(inCap, rs2_val);
     C(cd) = clearTagIf(newCap, not(success));
     RETIRE_SUCCESS
   }
@@ -573,11 +573,11 @@ function clause execute (CIncOffsetImmediate(cd, cs1, imm)) = {
   let immBits : xlenbits = sign_extend(imm);
 
   let inCap = clearTagIfSealed(cs1_val);
-  if inCap.tag & inCap.uninit & bit_to_bool(immBits[63]) then {
+  let (success, newCap) = incCapOffset(inCap, immBits);
+  if inCap.tag & checkUninit(cs1_val, newCap.address) then {
     handle_cheri_reg_exception(CapEx_UninitViolation, cs1);
     RETIRE_FAIL
   } else {
-    let (success, newCap) = incCapOffset(inCap, immBits);
     C(cd) = clearTagIf(newCap, not(success));
     RETIRE_SUCCESS
   }
@@ -603,11 +603,12 @@ function clause execute (CSetOffset(cd, cs1, rs2)) = {
 
   let inCap = clearTagIfSealed(cs1_val);
   let offset = getCapOffset(inCap);
-  if inCap.tag & inCap.uninit & (unsigned(rs2_val) < offset) then {
+  
+  let (success, newCap) = setCapOffset(cs1_val, rs2_val);
+  if inCap.tag & checkUninit(cs1_val, newCap.address) then {
     handle_cheri_reg_exception(CapEx_UninitViolation, cs1);
     RETIRE_FAIL
   } else {
-    let (success, newCap) = setCapOffset(cs1_val, rs2_val);
     C(cd) = clearTagIf(newCap, not(success));
     RETIRE_SUCCESS
   }
@@ -632,7 +633,7 @@ function clause execute (CSetAddr(cd, cs1, rs2)) = {
   let rs2_val = X(rs2);
 
   let inCap = clearTagIfSealed(cs1_val);
-  if inCap.tag & inCap.uninit & (rs2_val <_u cs1_val.address) then {
+  if inCap.tag & checkUninit(cs1_val, rs2_val) then {
     handle_cheri_reg_exception(CapEx_UninitViolation, cs1);
     RETIRE_FAIL
   } else {
@@ -665,7 +666,7 @@ function clause execute (CSetBounds(cd, cs1, rs2)) = {
   let inCap = clearTagIfSealed(cs1_val);
   let (exact, newCap) = setCapBounds(inCap, newBase, newTop);
 
-  assert(not(cs1_val.uninit & (newCap.address <_u cs1_val.address)),
+  assert(not(checkUninit(cs1_val,newCap.address)),
          "Uninit cap cursor may not be moved down!");
 
   if cs1_val.uninit & not(exact) & (getCapBaseBits(newCap) <_u cs1_val.address) then {
@@ -2447,12 +2448,29 @@ function clause execute (CDropUninit(cd, cs1)) = {
   }
 }
 
+function roundBoundsForShrinkCap(representableLength, requestedBase) : (CapAddrBits, CapAddrBits) -> (CapAddrBits, CapLenBits) = {
+  assert(representableLength == getRepresentableLength(representableLength));
+  let alignmentMask = getRepresentableAlignmentMask(representableLength) in
+    if (requestedBase & alignmentMask) == requestedBase then
+      (requestedBase, 0b0 @ (requestedBase + representableLength))
+    else
+      let alignedBase = (requestedBase + ~(alignmentMask)) & alignmentMask in
+      (alignedBase, 0b0 @ (alignedBase + representableLength))
+}
+
 val handle_shrink_cap : (regidx, regidx, Capability, CapAddrBits) -> Retired effect {escape, rreg, wreg} 
-function clause handle_shrink_cap(cd, cs1, cs1_val, newBase) = {
+function clause handle_shrink_cap(cd, cs1, cs1_val, requestedBase) = {
   let inCap = clearTagIfSealed(cs1_val);
   let cs1_base = getCapBaseBits(inCap);
   let cs1_top = getCapTopBits(inCap);
-  let newTop = (0b0 @ newBase) + (0b0 @ getCapOffsetBits(inCap));
+  let requestedLength = inCap.address - requestedBase;
+  let newLength = requestedLength & getRepresentableAlignmentMask(requestedLength);
+  print_instr("Requested length: " ^ BitStr(requestedLength) ^ " Aligned length: " ^ BitStr(newLength));
+  let (newBase, newTop) = if not(requestedLength == newLength) then {
+    roundBoundsForShrinkCap(newLength, requestedBase)
+  } else {
+    (requestedBase, 0b0 @ (requestedBase + newLength))
+  };
   if newBase <_u cs1_base then {
     handle_cheri_reg_exception(CapEx_LengthViolation, cs1);
     RETIRE_FAIL
@@ -2460,9 +2478,13 @@ function clause handle_shrink_cap(cd, cs1, cs1_val, newBase) = {
     handle_cheri_reg_exception(CapEx_LengthViolation, cs1);
     RETIRE_FAIL
   } else {
+    print_instr("Setting new base: " ^ BitStr(newBase) ^ ", new top: " ^ BitStr(truncate(newTop,64)));
     let (bounds_exact, newCap) = setCapBounds(inCap, newBase, newTop);
+    assert(bounds_exact);
     let (addr_exact, newCap) = setCapAddr(newCap, inCap.address);
-    C(cd) = clearTagIf(newCap, not (bounds_exact & addr_exact));
+    assert(addr_exact);
+    print_instr("Bounds exact: " ^ (if bounds_exact then "1" else "0") ^ "Addr exact:" ^ (if addr_exact then "1" else "0"));
+    C(cd) = newCap;
     RETIRE_SUCCESS
   }
 }

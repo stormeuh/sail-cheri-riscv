@@ -471,7 +471,8 @@ function inCapBounds (cap, addr, size) = {
  * violation of uninitialised capability.
  */
 function checkUninit (auth_val, addr) : (Capability, CapAddrBits) -> bool = {
-  auth_val.uninit & (addr <_u auth_val.address) 
+  let belowTop = 0b0 @ addr <_u getCapTopBits(auth_val) in
+  auth_val.uninit & belowTop & (addr <_u auth_val.address) 
 }
 
 function setUninit(cap) : Capability -> Capability =

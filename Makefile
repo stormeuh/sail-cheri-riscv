@@ -204,7 +204,7 @@ GMP_LIBS := $(shell pkg-config --libs gmp || echo -lgmp)
 ZLIB_FLAGS = $(shell pkg-config --cflags zlib)
 ZLIB_LIBS = $(shell pkg-config --libs zlib)
 
-C_FLAGS = -I $(SAIL_LIB_DIR) -I $(SAIL_RISCV_DIR)/c_emulator $(GMP_FLAGS) $(ZLIB_FLAGS) $(SOFTFLOAT_FLAGS)
+C_FLAGS = -std=gnu17 -I $(SAIL_LIB_DIR) -I $(SAIL_RISCV_DIR)/c_emulator $(GMP_FLAGS) $(ZLIB_FLAGS) $(SOFTFLOAT_FLAGS)
 C_LIBS  = $(GMP_LIBS) $(ZLIB_LIBS) $(SOFTFLOAT_LIBS)
 
 ifneq (,$(SAILCOV))

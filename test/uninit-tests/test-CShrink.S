@@ -62,6 +62,23 @@ test_length:
         cshrinkimm ct0, cs0, 4
         j test_fail
 
+test_large:
+	li gp, 5
+        cspecialrw cs0, ddc, c0
+	li t0, 0x80000000
+	li t1, 0x80000
+        cincoffset cs0, cs0, t0
+	csetbounds cs0, cs0, t0
+	cincoffset cs0, cs0, t1
+	cincoffsetimm cs0, cs0, -1
+	cshrink ca0, cs0, 0
+	li t2, 0x7FC00
+	mv a1, t0
+	add a2, t0, t1
+	addi a2, a2, -1
+	add a3, t0, t2
+	call check_shrink
+
 test_success:
         RVTEST_PASS
 
@@ -101,7 +118,7 @@ check_shrink:
         cgetaddr t1, ca0
         bne t1, a2, test_fail
         addi gp, gp, 10
-        cgetlen t2, ca0
+        cgettop t2, ca0
         bne t2, a3, test_fail
         addi gp, gp, -30
         ret
