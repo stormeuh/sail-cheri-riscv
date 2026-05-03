@@ -1632,6 +1632,7 @@ function clause execute (CInvokeLAL(cd, cs)) = {
   } else {
     let idc = unsealCap(cs_val);
     let idcaddr = cs_val.address;
+    print_platform("Jumping through points-to-PCC sentry:\n\tIDC: " ^ capToString(idc) ^ "\n\tIDC Address: " ^ BitStr(idcaddr));
 
     if not (idc.permit_load) | not (idc.permit_load_cap) then {
       handle_cheri_reg_exception(CapEx_PermitLoadViolation, cs);
@@ -2408,6 +2409,7 @@ union clause ast = CUninit          : (regidx, regidx)
 union clause ast = CDropUninit      : (regidx, regidx)
 union clause ast = CShrink          : (regidx, regidx, regidx)
 union clause ast = CShrinkImmediate : (regidx, regidx, bits(12))
+union clause ast = CSplice          : (regidx, regidx, regidx)
 
 /*!
  * Integer register *rd* is set equal to the **uninit** field of the capability
@@ -2465,7 +2467,7 @@ function clause handle_shrink_cap(cd, cs1, cs1_val, requestedBase) = {
   let cs1_top = getCapTopBits(inCap);
   let requestedLength = inCap.address - requestedBase;
   let newLength = requestedLength & getRepresentableAlignmentMask(requestedLength);
-  print_instr("Requested length: " ^ BitStr(requestedLength) ^ " Aligned length: " ^ BitStr(newLength));
+  /* print_instr("Requested length: " ^ BitStr(requestedLength) ^ " Aligned length: " ^ BitStr(newLength)); */
   let (newBase, newTop) = if not(requestedLength == newLength) then {
     roundBoundsForShrinkCap(newLength, requestedBase)
   } else {
@@ -2478,12 +2480,12 @@ function clause handle_shrink_cap(cd, cs1, cs1_val, requestedBase) = {
     handle_cheri_reg_exception(CapEx_LengthViolation, cs1);
     RETIRE_FAIL
   } else {
-    print_instr("Setting new base: " ^ BitStr(newBase) ^ ", new top: " ^ BitStr(truncate(newTop,64)));
+/*    print_instr("Setting new base: " ^ BitStr(newBase) ^ ", new top: " ^ BitStr(truncate(newTop,64))); */
     let (bounds_exact, newCap) = setCapBounds(inCap, newBase, newTop);
     assert(bounds_exact);
     let (addr_exact, newCap) = setCapAddr(newCap, inCap.address);
     assert(addr_exact);
-    print_instr("Bounds exact: " ^ (if bounds_exact then "1" else "0") ^ "Addr exact:" ^ (if addr_exact then "1" else "0"));
+/*    print_instr("Bounds exact: " ^ (if bounds_exact then "1" else "0") ^ "Addr exact:" ^ (if addr_exact then "1" else "0")); */
     C(cd) = newCap;
     RETIRE_SUCCESS
   }
@@ -2525,6 +2527,43 @@ function clause execute (CShrinkImmediate(cd, cs1, imm12)) = {
   let imm64 : bits(64) = zero_extend(imm12);
   let newBase = getCapBaseBits(cs1_val) + imm64;
   handle_shrink_cap(cd, cs1, cs1_val, newBase)
+}
+
+/*!
+ * The capability written to cd will be the one in cs1, extended by the authority of cs2.
+ *
+ * Tag is cleared if cs1 is sealed, or the resulting capability is not exactly representable.
+ *
+ * ## Exceptions
+ * - LengthViolation if the bounds are not contiguous.
+ * - UninitViolation if the capability is uninitialised and extension is at the top.
+ */
+function clause execute (CSplice(cd, cs1, cs2)) = {
+  let cs1_val = C(cs1);
+  let cs2_val = C(cs2);
+
+  let extend_below = getCapBaseBits(cs2_val) <_u getCapBaseBits(cs1_val);
+  let extend_above = getCapTopBits(cs1_val) <_u getCapTopBits(cs2_val);
+
+  print_instr("Extend below: " ^ (if extend_below then "1" else "0") ^ ", Extend above:" ^ (if extend_above then "1" else "0"));
+  print_instr("Base cap: " ^ capToString(cs1_val) ^ ", extension cap: " ^ capToString(cs2_val));
+
+  if not(extend_below | extend_above) then {
+    handle_cheri_reg_exception(CapEx_LengthViolation, cs1);
+    RETIRE_FAIL
+  } else if (cs1_val.uninit & extend_above) then {
+    handle_cheri_reg_exception(CapEx_UninitViolation, cs1);
+    RETIRE_FAIL
+  } else {
+    let newBase = if extend_below then getCapBaseBits(cs2_val) else getCapBaseBits(cs1_val);
+    let newTop = if extend_above then getCapTopBits(cs2_val) else getCapTopBits(cs1_val);
+    let (bounds_exact, newCap) = setCapBounds(cs1_val, newBase, newTop);
+    let (addr_exact, newCap) = setCapAddr(newCap, cs1_val.address);
+    
+    let resultIsValid = cs2_val.tag & bounds_exact & addr_exact;
+    C(cd) = clearTagIf(newCap, not(resultIsValid) | isCapSealed(cs1_val));
+    RETIRE_SUCCESS
+  }
 }
 
 union clause ast = StoreUninitDataCap : (regidx, regidx, regidx, word_width)
@@ -2583,8 +2622,15 @@ function clause execute (StoreUninitCapCap(cd, cs2, cs1)) = {
     RETIRE_FAIL
   } else {
     let vaddr = cs1_val.address - cap_size;
-    C(cd) = { cs1_val with address = vaddr };
-    handle_store_cap_via_cap(cs2, 0b0 @ cs1, cs1_val, vaddr)
+    let store_retired = handle_store_cap_via_cap(cs2, 0b0 @ cs1, cs1_val, vaddr); 
+    match store_retired {
+      RETIRE_SUCCESS => {
+        /* Destination register should only be changed **after** store was successful. */
+        C(cd) = { cs1_val with address = vaddr };
+        RETIRE_SUCCESS
+      },
+      RETIRE_FAIL => RETIRE_FAIL
+    }
   }
 }
 
@@ -2690,6 +2736,7 @@ mapping clause encdec = CTestSubset(rd, cs1, cs2) if (haveXcheri()) <-> 0b010000
 mapping clause encdec = CSpecialRW(cd, scr, cs1)  if (haveXcheri()) <-> 0b0000001 @ scr @ cs1 @ 0b000 @ cd @ 0b1011011 if (haveXcheri())
 
 mapping clause encdec = CShrink(cd, cs1, rs2)     if (haveXcheri() & sizeof(xlen) == 64) <-> 0b0100010 @ rs2 @ cs1 @ 0b000 @ cd @ 0b1011011 if (haveXcheri() & sizeof(xlen) == 64)
+mapping clause encdec = CSplice(cd, cs1, rs2)     if (haveXcheri() & sizeof(xlen) == 64) <-> 0b0100011 @ rs2 @ cs1 @ 0b000 @ cd @ 0b1011011 if (haveXcheri() & sizeof(xlen) == 64)
 
 mapping clause encdec = CIncOffsetImmediate(cd, cs1, imm12) if (haveXcheri()) <-> imm12 : bits(12) @ cs1 @ 0b001 @ cd @ 0b1011011 if (haveXcheri())
 mapping clause encdec = CSetBoundsImmediate(cd, cs1, imm12) if (haveXcheri()) <-> imm12 : bits(12) @ cs1 @ 0b010 @ cd @ 0b1011011 if (haveXcheri())
@@ -2721,6 +2768,7 @@ mapping clause assembly = CTestSubset(rd, cs1, cs2) <-> "ctestsubset" ^ spc() ^ 
 mapping clause assembly = CSpecialRW(cd, scr, cs1) <-> "cspecialrw"  ^ spc() ^ cap_reg_name(cd) ^ sep() ^ scr_name_map(scr) ^ sep() ^ cap_reg_name(cs1)
 
 mapping clause assembly = CShrink(cd, cs1, rs2) <-> "cshrink" ^ spc() ^ cap_reg_name(cd) ^ sep() ^ cap_reg_name(cs1) ^ sep() ^ reg_name(rs2)
+mapping clause assembly = CSplice(cd, cs1, rs2) <-> "csplice" ^ spc() ^ cap_reg_name(cd) ^ sep() ^ cap_reg_name(cs1) ^ sep() ^ reg_name(rs2)
 
 mapping clause assembly = CIncOffsetImmediate(cd, cs1, imm12) <-> "cincoffsetimm" ^ spc() ^ cap_reg_name(cd) ^ sep() ^ cap_reg_name(cs1) ^ sep() ^ hex_bits_12(imm12)
 mapping clause assembly = CSetBoundsImmediate(cd, cs1, imm12) <-> "csetboundsimm" ^ spc() ^ cap_reg_name(cd) ^ sep() ^ cap_reg_name(cs1) ^ sep() ^ hex_bits_12(imm12)
